@@ -1,13 +1,11 @@
 import { createContext, PropsWithChildren, useContext, useMemo, useState } from 'react';
 
 import { MenuItem } from '@/data/menuItems';
-
-export interface CartItem extends MenuItem {
-  quantity: number;
-}
+import type { CartItem, Order, OrderStatus } from '@/types/order';
 
 interface CartContextValue {
   cartItems: CartItem[];
+  currentOrder: Order | null;
   cartItemCount: number;
   cartSubtotal: number;
   addToCart: (item: MenuItem, quantity?: number) => void;
@@ -15,12 +13,24 @@ interface CartContextValue {
   increaseQuantity: (itemId: string) => void;
   decreaseQuantity: (itemId: string) => void;
   clearCart: () => void;
+  placeOrder: () => Order | null;
+  advanceOrderStatus: () => void;
 }
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
+const generateOrderId = () => `QB-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+
+const generatePickupTime = () => {
+  const pickupDate = new Date();
+  pickupDate.setMinutes(pickupDate.getMinutes() + 15);
+
+  return pickupDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+};
+
 export function CartProvider({ children }: PropsWithChildren) {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
 
   // Adds an item or increases its existing quantity so one product never creates duplicate rows.
   const addToCart = (item: MenuItem, quantity = 1) => {
@@ -62,6 +72,50 @@ export function CartProvider({ children }: PropsWithChildren) {
 
   const clearCart = () => setCartItems([]);
 
+  // The cart and current order are intentionally separate states.
+  // The cart only holds items waiting to be ordered, while the order stores a snapshot after checkout.
+  const placeOrder = () => {
+    if (cartItems.length === 0) {
+      return null;
+    }
+
+    const orderItems: CartItem[] = cartItems.map((item) => ({ ...item }));
+    const subtotal = cartItems.reduce((total, item) => total + item.price * item.quantity, 0);
+
+    // The order must keep its own copy of the cart state because the cart is cleared immediately after placement.
+    const newOrder: Order = {
+      id: generateOrderId(),
+      items: orderItems,
+      subtotal,
+      status: 'PLACED',
+      estimatedPickupTime: generatePickupTime(),
+    };
+
+    setCurrentOrder(newOrder);
+    setCartItems([]);
+
+    return newOrder;
+  };
+
+  // Advances the current order through the prototype status flow: PLACED -> PREPARING -> READY.
+  const advanceOrderStatus = () => {
+    setCurrentOrder((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (current.status === 'PLACED') {
+        return { ...current, status: 'PREPARING' };
+      }
+
+      if (current.status === 'PREPARING') {
+        return { ...current, status: 'READY' };
+      }
+
+      return current;
+    });
+  };
+
   // These derived values keep the cart badge and checkout total synchronized automatically.
   const cartItemCount = useMemo(
     () => cartItems.reduce((total, item) => total + item.quantity, 0),
@@ -76,6 +130,7 @@ export function CartProvider({ children }: PropsWithChildren) {
     <CartContext.Provider
       value={{
         cartItems,
+        currentOrder,
         cartItemCount,
         cartSubtotal,
         addToCart,
@@ -83,6 +138,8 @@ export function CartProvider({ children }: PropsWithChildren) {
         increaseQuantity,
         decreaseQuantity,
         clearCart,
+        placeOrder,
+        advanceOrderStatus,
       }}>
       {children}
     </CartContext.Provider>
